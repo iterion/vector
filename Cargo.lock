@@ -8455,6 +8455,7 @@ version = "0.1.0"
 dependencies = [
  "metrics",
  "serde_json",
+ "smallvec",
  "tracing 0.1.29",
 ]
 
@@ -8507,6 +8508,7 @@ dependencies = [
  "serde",
  "serde_json",
  "shared",
+ "smallvec",
  "snafu",
  "substring",
  "tokio",

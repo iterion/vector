@@ -9,6 +9,7 @@ publish = false
 test = []
 
 [dependencies]
-serde_json = { version = "1.0.78", default-features = false, features = ["std", "raw_value"] }
 metrics = { version = "0.17.0", default-features = false, features = ["std"] }
+serde_json = { version = "1.0.78", default-features = false, features = ["std", "raw_value"] }
+smallvec = { version = "1", features = ["const_generics", "union"] }
 tracing = { version = "0.1.29", default-features = false }
