@@ -1,6 +1,4 @@
-use crate::{config::ComponentKey, event::Event};
-use futures::Sink;
-use futures_util::SinkExt;
+use futures::{Sink, SinkExt};
 use std::{
     fmt,
     pin::Pin,
@@ -8,7 +6,9 @@ use std::{
 };
 use tokio::sync::mpsc;
 
-type GenericEventSink = Pin<Box<dyn Sink<Event, Error = ()> + Send>>;
+use crate::{config::ComponentKey, event::EventArray};
+
+type GenericEventSink = Pin<Box<dyn Sink<EventArray, Error = ()> + Send>>;
 
 pub enum ControlMessage {
     Add(ComponentKey, GenericEventSink),
@@ -117,7 +117,7 @@ impl Fanout {
     ) -> Poll<Result<(), ()>>
     where
         F: Fn(
-            Pin<&mut (dyn Sink<Event, Error = ()> + Send)>,
+            Pin<&mut (dyn Sink<EventArray, Error = ()> + Send)>,
             &mut Context<'_>,
         ) -> Poll<Result<(), ()>>,
     {
@@ -144,7 +144,7 @@ impl Fanout {
     }
 }
 
-impl Sink<Event> for Fanout {
+impl Sink<EventArray> for Fanout {
     type Error = ();
 
     fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), ()>> {
@@ -171,9 +171,8 @@ impl Sink<Event> for Fanout {
         Poll::Ready(Ok(()))
     }
 
-    fn start_send(mut self: Pin<&mut Self>, item: Event) -> Result<(), ()> {
+    fn start_send(mut self: Pin<&mut Self>, item: EventArray) -> Result<(), ()> {
         let mut items = vec![item; self.sinks.len()];
-
         let mut i = 1;
         while let Some((_, sink)) = self.sinks.get_mut(i) {
             if let Some(sink) = sink.as_mut() {
@@ -225,7 +224,8 @@ mod tests {
     };
 
     use super::{ControlMessage, Fanout};
-    use crate::{config::ComponentKey, event::Event, test_util::collect_ready};
+    use crate::event::{Event, EventArray, EventContainer, LogEvent};
+    use crate::{config::ComponentKey, test_util::collect_ready_events};
 
     #[tokio::test]
     async fn fanout_writes_to_all() {
@@ -238,11 +238,12 @@ mod tests {
         fanout.add(ComponentKey::from("b"), Box::pin(tx_b));
 
         let recs = make_events(2);
-        let send = stream::iter(recs.clone()).map(Ok).forward(fanout);
+        let send = stream::iter(vec![Ok(recs.clone())]).forward(fanout);
         send.await.unwrap();
 
-        assert_eq!(collect_ready(rx_a), recs);
-        assert_eq!(collect_ready(rx_b), recs);
+        let recs: Vec<Event> = recs.into_events().collect();
+        assert_eq!(collect_ready_events(rx_a), recs);
+        assert_eq!(collect_ready_events(rx_b), recs);
     }
 
     #[tokio::test]
@@ -258,7 +259,7 @@ mod tests {
         fanout.add(ComponentKey::from("c"), Box::pin(tx_c));
 
         let recs = make_events(3);
-        let send = stream::iter(recs.clone()).map(Ok).forward(fanout);
+        let send = stream::iter(vec![Ok(recs.clone())]).forward(fanout);
         tokio::spawn(send);
 
         sleep(Duration::from_millis(50)).await;
@@ -268,9 +269,10 @@ mod tests {
         let collect_b = tokio::spawn(rx_b.collect::<Vec<_>>());
         let collect_c = tokio::spawn(rx_c.collect::<Vec<_>>());
 
-        assert_eq!(collect_a.await.unwrap(), recs);
-        assert_eq!(collect_b.await.unwrap(), recs);
-        assert_eq!(collect_c.await.unwrap(), recs);
+        let recs: Vec<Event> = recs.into_events().collect();
+        assert_eq!(flatten(collect_a.await.unwrap()), recs);
+        assert_eq!(flatten(collect_b.await.unwrap()), recs);
+        assert_eq!(flatten(collect_c.await.unwrap()), recs);
     }
 
     #[tokio::test]
@@ -285,17 +287,18 @@ mod tests {
 
         let recs = make_events(3);
 
-        fanout.send(recs[0].clone()).await.unwrap();
-        fanout.send(recs[1].clone()).await.unwrap();
+        let recs: Vec<Event> = recs.clone().into_events().collect();
+        fanout.send(recs[0].clone().into()).await.unwrap();
+        fanout.send(recs[1].clone().into()).await.unwrap();
 
         let (tx_c, rx_c) = TopologyBuilder::memory(4, WhenFull::Block).await;
         fanout.add(ComponentKey::from("c"), Box::pin(tx_c));
 
-        fanout.send(recs[2].clone()).await.unwrap();
+        fanout.send(recs[2].clone().into()).await.unwrap();
 
-        assert_eq!(collect_ready(rx_a), recs);
-        assert_eq!(collect_ready(rx_b), recs);
-        assert_eq!(collect_ready(rx_c), &recs[2..]);
+        assert_eq!(collect_ready_events(rx_a), recs);
+        assert_eq!(collect_ready_events(rx_b), recs);
+        assert_eq!(collect_ready_events(rx_c), &recs[2..]);
     }
 
     #[tokio::test]
@@ -309,18 +312,19 @@ mod tests {
         fanout.add(ComponentKey::from("b"), Box::pin(tx_b));
 
         let recs = make_events(3);
+        let recs: Vec<Event> = recs.into_events().collect();
 
-        fanout.send(recs[0].clone()).await.unwrap();
-        fanout.send(recs[1].clone()).await.unwrap();
+        fanout.send(recs[0].clone().into()).await.unwrap();
+        fanout.send(recs[1].clone().into()).await.unwrap();
 
         fanout_control
             .send(ControlMessage::Remove(ComponentKey::from("b")))
             .unwrap();
 
-        fanout.send(recs[2].clone()).await.unwrap();
+        fanout.send(recs[2].clone().into()).await.unwrap();
 
-        assert_eq!(collect_ready(rx_a), recs);
-        assert_eq!(collect_ready(rx_b), &recs[..2]);
+        assert_eq!(collect_ready_events(rx_a), recs);
+        assert_eq!(collect_ready_events(rx_b), &recs[..2]);
     }
 
     #[tokio::test]
@@ -336,7 +340,7 @@ mod tests {
         fanout.add(ComponentKey::from("c"), Box::pin(tx_c));
 
         let recs = make_events(3);
-        let send = stream::iter(recs.clone()).map(Ok).forward(fanout);
+        let send = stream::iter(vec![Ok(recs.clone())]).forward(fanout);
         tokio::spawn(send);
 
         sleep(Duration::from_millis(50)).await;
@@ -349,9 +353,10 @@ mod tests {
         let collect_b = tokio::spawn(rx_b.collect::<Vec<_>>());
         let collect_c = tokio::spawn(rx_c.collect::<Vec<_>>());
 
-        assert_eq!(collect_a.await.unwrap(), recs);
-        assert_eq!(collect_b.await.unwrap(), recs);
-        assert_eq!(collect_c.await.unwrap(), &recs[..1]);
+        let recs: Vec<Event> = recs.into_events().collect();
+        assert_eq!(flatten(collect_a.await.unwrap()), recs);
+        assert_eq!(flatten(collect_b.await.unwrap()), recs);
+        assert_eq!(flatten(collect_c.await.unwrap()), &recs[..1]);
     }
 
     #[tokio::test]
@@ -367,7 +372,7 @@ mod tests {
         fanout.add(ComponentKey::from("c"), Box::pin(tx_c));
 
         let recs = make_events(3);
-        let send = stream::iter(recs.clone()).map(Ok).forward(fanout);
+        let send = stream::iter(vec![Ok(recs.clone())]).forward(fanout);
         tokio::spawn(send);
 
         sleep(Duration::from_millis(50)).await;
@@ -380,9 +385,10 @@ mod tests {
         let collect_b = tokio::spawn(rx_b.collect::<Vec<_>>());
         let collect_c = tokio::spawn(rx_c.collect::<Vec<_>>());
 
-        assert_eq!(collect_a.await.unwrap(), recs);
-        assert_eq!(collect_b.await.unwrap(), &recs[..1]);
-        assert_eq!(collect_c.await.unwrap(), recs);
+        let recs: Vec<Event> = recs.into_events().collect();
+        assert_eq!(flatten(collect_a.await.unwrap()), recs);
+        assert_eq!(flatten(collect_b.await.unwrap()), &recs[..1]);
+        assert_eq!(flatten(collect_c.await.unwrap()), recs);
     }
 
     #[tokio::test]
@@ -398,7 +404,7 @@ mod tests {
         fanout.add(ComponentKey::from("c"), Box::pin(tx_c));
 
         let recs = make_events(3);
-        let send = stream::iter(recs.clone()).map(Ok).forward(fanout);
+        let send = stream::iter(vec![Ok(recs.clone())]).forward(fanout);
         tokio::spawn(send);
 
         sleep(Duration::from_millis(50)).await;
@@ -412,19 +418,20 @@ mod tests {
         let collect_b = tokio::spawn(rx_b.collect::<Vec<_>>());
         let collect_c = tokio::spawn(rx_c.collect::<Vec<_>>());
 
-        assert_eq!(collect_a.await.unwrap(), &recs[..1]);
-        assert_eq!(collect_b.await.unwrap(), recs);
-        assert_eq!(collect_c.await.unwrap(), recs);
+        let recs: Vec<Event> = recs.into_events().collect();
+        assert_eq!(flatten(collect_a.await.unwrap()), &recs[..1]);
+        assert_eq!(flatten(collect_b.await.unwrap()), recs);
+        assert_eq!(flatten(collect_c.await.unwrap()), recs);
     }
 
     #[tokio::test]
     async fn fanout_no_sinks() {
-        let (mut fanout, _fanout_control) = Fanout::new();
+        let (fanout, _fanout_control) = Fanout::new();
 
         let recs = make_events(2);
 
-        fanout.send(recs[0].clone()).await.unwrap();
-        fanout.send(recs[1].clone()).await.unwrap();
+        let send = stream::iter(vec![Ok(recs)]).forward(fanout);
+        tokio::spawn(send);
     }
 
     #[tokio::test]
@@ -438,18 +445,19 @@ mod tests {
         fanout.add(ComponentKey::from("b"), Box::pin(tx_b));
 
         let recs = make_events(3);
+        let recs: Vec<Event> = recs.into_events().collect();
 
-        fanout.send(recs[0].clone()).await.unwrap();
-        fanout.send(recs[1].clone()).await.unwrap();
+        fanout.send(recs[0].clone().into()).await.unwrap();
+        fanout.send(recs[1].clone().into()).await.unwrap();
 
         let (tx_a2, rx_a2) = TopologyBuilder::memory(4, WhenFull::Block).await;
         fanout.replace(&ComponentKey::from("a"), Some(Box::pin(tx_a2)));
 
-        fanout.send(recs[2].clone()).await.unwrap();
+        fanout.send(recs[2].clone().into()).await.unwrap();
 
-        assert_eq!(collect_ready(rx_a1), &recs[..2]);
-        assert_eq!(collect_ready(rx_b), recs);
-        assert_eq!(collect_ready(rx_a2), &recs[2..]);
+        assert_eq!(collect_ready_events(rx_a1), &recs[..2]);
+        assert_eq!(collect_ready_events(rx_b), recs);
+        assert_eq!(collect_ready_events(rx_a2), &recs[2..]);
     }
 
     #[tokio::test]
@@ -463,9 +471,10 @@ mod tests {
         fanout.add(ComponentKey::from("b"), Box::pin(tx_b));
 
         let recs = make_events(3);
+        let recs: Vec<Event> = recs.into_events().collect();
 
-        fanout.send(recs[0].clone()).await.unwrap();
-        fanout.send(recs[1].clone()).await.unwrap();
+        fanout.send(recs[0].clone().into()).await.unwrap();
+        fanout.send(recs[1].clone().into()).await.unwrap();
 
         let (tx_a2, rx_a2) = TopologyBuilder::memory(4, WhenFull::Block).await;
         fanout.replace(&ComponentKey::from("a"), None);
@@ -480,12 +489,12 @@ mod tests {
                     ))
                     .unwrap();
             },
-            fanout.send(recs[2].clone()).map(|_| ())
+            fanout.send(recs[2].clone().into()).map(|_| ())
         );
 
-        assert_eq!(collect_ready(rx_a1), &recs[..2]);
-        assert_eq!(collect_ready(rx_b), recs);
-        assert_eq!(collect_ready(rx_a2), &recs[2..]);
+        assert_eq!(collect_ready_events(rx_a1), &recs[..2]);
+        assert_eq!(collect_ready_events(rx_b), recs);
+        assert_eq!(collect_ready_events(rx_a2), &recs[2..]);
     }
 
     #[tokio::test]
@@ -548,7 +557,7 @@ mod tests {
         }
 
         let recs = make_events(3);
-        let send = stream::iter(recs.clone()).map(Ok).forward(fanout);
+        let send = stream::iter(vec![Ok(recs.clone())]).forward(fanout);
         tokio::spawn(send);
 
         sleep(Duration::from_millis(50)).await;
@@ -559,8 +568,9 @@ mod tests {
             .map(|rx| tokio::spawn(rx.collect::<Vec<_>>()))
             .collect::<Vec<_>>();
 
+        let recs: Vec<Event> = recs.into_events().collect();
         for collect in collectors {
-            assert_eq!(collect.await.unwrap(), recs);
+            assert_eq!(flatten(collect.await.unwrap()), recs);
         }
     }
 
@@ -575,7 +585,7 @@ mod tests {
         when: ErrorWhen,
     }
 
-    impl Sink<Event> for AlwaysErrors {
+    impl Sink<EventArray> for AlwaysErrors {
         type Error = crate::Error;
 
         fn poll_ready(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -585,7 +595,7 @@ mod tests {
             })
         }
 
-        fn start_send(self: Pin<&mut Self>, _: Event) -> Result<(), Self::Error> {
+        fn start_send(self: Pin<&mut Self>, _: EventArray) -> Result<(), Self::Error> {
             match self.when {
                 ErrorWhen::Poll => Err("Something failed".into()),
                 _ => Ok(()),
@@ -607,9 +617,17 @@ mod tests {
         }
     }
 
-    fn make_events(count: usize) -> Vec<Event> {
+    fn make_events(count: usize) -> EventArray {
         (0..count)
-            .map(|i| Event::from(format!("line {}", i)))
+            .map(|i| LogEvent::from(format!("line {}", i)))
+            .collect::<Vec<LogEvent>>()
+            .into()
+    }
+
+    fn flatten(events: impl IntoIterator<Item = EventArray>) -> Vec<Event> {
+        events
+            .into_iter()
+            .flat_map(EventContainer::into_events)
             .collect()
     }
 }
