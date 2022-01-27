@@ -627,7 +627,7 @@ mod tests {
     fn flatten(events: impl IntoIterator<Item = EventArray>) -> Vec<Event> {
         events
             .into_iter()
-            .flat_map(EventContainer::into_events)
+            .flat_map(EventArray::into_events)
             .collect()
     }
 }
