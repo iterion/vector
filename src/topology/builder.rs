@@ -611,14 +611,6 @@ impl Runner {
                             let mut outputs_buf = self.outputs.new_buf_with_capacity(events.len());
                             let task = tokio::spawn(async move {
                                 t.transform_all(events, &mut outputs_buf);
-                                /*
-                                for array in events {
-                                    for event in array.into_events() {
-                                        t.transform(event, &mut outputs_buf);
-                                    }
-                                }
-                                 */
-
                                 outputs_buf
                             });
                             in_flight.push(task);
