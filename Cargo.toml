@@ -622,6 +622,7 @@ sinks-logs = [
   "sinks-elasticsearch",
   "sinks-file",
   "sinks-gcp",
+  "sinks-gelf",
   "sinks-honeycomb",
   "sinks-http",
   "sinks-humio",
@@ -673,6 +674,7 @@ sinks-datadog_metrics = ["protobuf-build", "sinks-azure_blob"]
 sinks-elasticsearch = ["rusoto", "transforms-metric_to_log"]
 sinks-file = []
 sinks-gcp = ["base64", "goauth", "gouth", "smpl_jwt"]
+sinks-gelf = []
 sinks-honeycomb = []
 sinks-http = []
 sinks-humio = ["sinks-splunk_hec", "transforms-metric_to_log"]

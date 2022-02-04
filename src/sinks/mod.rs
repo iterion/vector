@@ -43,6 +43,8 @@ pub mod file;
 pub mod gcp;
 #[cfg(any(feature = "sinks-gcp"))]
 pub mod gcs_common;
+#[cfg(feature = "sinks-gelf")]
+pub mod gelf;
 #[cfg(feature = "sinks-honeycomb")]
 pub mod honeycomb;
 #[cfg(feature = "sinks-http")]
