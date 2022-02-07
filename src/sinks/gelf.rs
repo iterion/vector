@@ -31,7 +31,7 @@ pub struct GelfUdpConfig {
 }
 
 inventory::submit! {
-    SinkDescription::new::<GelfSinkConfig>("statsd")
+    SinkDescription::new::<GelfSinkConfig>("gelf")
 }
 
 fn default_address() -> SocketAddr {
@@ -51,7 +51,7 @@ impl GenerateConfig for GelfSinkConfig {
 }
 
 #[async_trait::async_trait]
-#[typetag::serde(name = "statsd")]
+#[typetag::serde(name = "gelf")]
 impl SinkConfig for GelfSinkConfig {
     async fn build(
         &self,
@@ -181,5 +181,68 @@ mod test {
             messages[0],
             Bytes::from("{\"version\":\"1.1\",\"host\":\"vector\",\"short_message\":\"log1\",\"timestamp\":1641803409.0}")
         );
+    }
+}
+
+#[cfg(test)]
+#[cfg(feature = "graylog-integration-tests")]
+mod integration_tests {
+    use serde_json::Value;
+    use tokio::time::{timeout, Duration};
+    use chrono::{TimeZone, Utc};
+    use vector_core::event::{Event, LogEvent};
+    use reqwest::Client;
+
+    use super::*;
+    use crate::{
+        config::{log_schema, SinkConfig, SinkContext},
+        sinks::util::encoding::TimestampFormat,
+        test_util::{
+            components::{self, HTTP_SINK_TAGS},
+            random_string, trace_init,
+        },
+    };
+
+    fn graylog_address() -> String {
+        std::env::var("GRAYLOG_ADDRESS").unwrap_or_else(|_| "http://localhost:12201".into())
+    }
+
+    fn graylog_password() -> String {
+        std::env::var("GRAYLOG_PASSWORD").unwrap_or_else(|_| "vectortest".into())
+    }
+
+    #[tokio::test]
+    async fn insert_events() {
+        trace_init();
+        let client = Client::new();
+
+        let host = graylog_address();
+
+        let config = GelfSinkConfig {
+            mode: Mode::Udp(GelfUdpConfig {
+                // batch,
+                udp: UdpSinkConfig::from_address(host.to_string()),
+            }),
+        };
+
+        let (sink, _hc) = config.build(SinkContext::new_test()).await.unwrap();
+
+        let dt = Utc.ymd(2022, 1, 10).and_hms(8, 30, 9);
+        let mut log1 = LogEvent::from("log1");
+        log1.insert_flat("timestamp", dt);
+        log1.insert_flat("extra", "udp_test_vector");
+
+        components::run_sink_event(sink, Event::Log(log1.clone()), &HTTP_SINK_TAGS).await;
+        // let output = client.select_all(&table).await;
+        // assert_eq!(1, output.rows);
+        let resp = client.get("http://0.0.0.0:9000/api/search")
+            .basic_auth("admin", Some(graylog_password()))
+            .send()
+            .await
+            .unwrap();
+
+        // let expected = serde_json::to_value(input_event.into_log()).unwrap();
+        // assert_eq!(expected, output.data[0]);
+
     }
 }

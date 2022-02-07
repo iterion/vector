@@ -1,0 +1,76 @@
+services:
+  mongo:
+    image: mongo:4.2
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch-oss:7.10.2
+    environment:
+      - http.host=0.0.0.0
+      - transport.host=localhost
+      - network.host=0.0.0.0
+      - "ES_JAVA_OPTS=-Dlog4j2.formatMsgNoLookups=true -Xms512m -Xmx512m"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+
+  graylog:
+    image: graylog/graylog:4.2
+    environment:
+      - GRAYLOG_PASSWORD_SECRET=somepasswordpepper
+      - GRAYLOG_ROOT_PASSWORD_SHA2=fa9ff2e0218a974cf1fe8942b66f518d592f8666b003a9d5a14cb3c42dfe3525
+      - GRAYLOG_HTTP_EXTERNAL_URI=http://127.0.0.1:9000/
+    entrypoint: /usr/bin/tini -- wait-for-it elasticsearch:9200 --  /docker-entrypoint.sh
+    restart: always
+    depends_on:
+      - mongo
+      - elasticsearch
+    ports:
+      # Graylog web interface and REST API
+      - 9000:9000
+      # Syslog TCP
+      - 1514:1514
+      # Syslog UDP
+      - 1514:1514/udp
+      # GELF TCP
+      - 12201:12201
+      # GELF UDP
+      - 12201:12201/udp
+
+  runner:
+    build:
+      context: ${PWD}
+      dockerfile: scripts/integration/Dockerfile
+      args:
+        - RUST_VERSION=${RUST_VERSION}
+    working_dir: /code
+    command:
+      - "cargo"
+      - "test"
+      - "--no-fail-fast"
+      - "--no-default-features"
+      - "--features"
+      - "graylog-integration-tests"
+      - "--lib"
+      - "::graylog::"
+      - "--"
+      - "--nocapture"
+    environment:
+      - GRAYLOG_ADDRESS=http://graylog:12201
+      - GRAYLOG_PASSWORD=vectortest
+    depends_on:
+      - graylog
+    volumes:
+      - ${PWD}:/code
+      - cargogit:/usr/local/cargo/git
+      - cargoregistry:/usr/local/cargo/registry
+
+# this is made to improve the build when running locally
+volumes:
+  cargogit: {}
+  cargoregistry: {}
+

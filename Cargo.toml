@@ -674,7 +674,7 @@ sinks-datadog_metrics = ["protobuf-build", "sinks-azure_blob"]
 sinks-elasticsearch = ["rusoto", "transforms-metric_to_log"]
 sinks-file = []
 sinks-gcp = ["base64", "goauth", "gouth", "smpl_jwt"]
-sinks-gelf = []
+sinks-gelf = ["tokio-util/net"]
 sinks-honeycomb = []
 sinks-http = []
 sinks-humio = ["sinks-splunk_hec", "transforms-metric_to_log"]
@@ -723,6 +723,7 @@ all-integration-tests = [
   "gcp-cloud-storage-integration-tests",
   "gcp-integration-tests",
   "gcp-pubsub-integration-tests",
+  "graylog-integration-tests",
   "humio-integration-tests",
   "influxdb-integration-tests",
   "kafka-integration-tests",
@@ -774,6 +775,7 @@ fluent-integration-tests = ["docker", "sources-fluent"]
 gcp-cloud-storage-integration-tests = ["sinks-gcp"]
 gcp-integration-tests = ["sinks-gcp"]
 gcp-pubsub-integration-tests = ["sinks-gcp"]
+graylog-integration-tests = ["sinks-gelf"]
 humio-integration-tests = ["sinks-humio"]
 influxdb-integration-tests = ["sinks-influxdb"]
 kafka-integration-tests = ["sinks-kafka", "sources-kafka"]
